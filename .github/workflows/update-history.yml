@@ -32,9 +32,6 @@ jobs:
           import urllib.request
           from datetime import datetime
 
-          SUPER_FILE = "SuperEnalotto_History.csv"
-          EURO_FILE = "EuroJackpot_History.csv"
-
           SUPER_BACKUP = (
               "https://raw.githubusercontent.com/"
               "rogerouffoue123-sketch/lotto-generator-data/"
@@ -51,362 +48,177 @@ jobs:
               "eurojackpot/2026/estrazioni.php"
           )
 
-          USER_AGENT = "LOTTO-GENERATOR-history-updater/2.0"
+          SUPER_FILE = "SuperEnalotto_History.csv"
+          EURO_FILE = "EuroJackpot_History.csv"
 
           def download(url):
               request = urllib.request.Request(
                   url,
-                  headers={"User-Agent": USER_AGENT}
+                  headers={
+                      "User-Agent": "LOTTO-GENERATOR/1.0"
+                  }
               )
-              with urllib.request.urlopen(request, timeout=60) as response:
-                  return response.read().decode("utf-8", errors="replace")
+              with urllib.request.urlopen(
+                  request,
+                  timeout=60
+              ) as response:
+                  return response.read().decode("utf-8-sig")
 
-          def normalize_text(html):
-              text = re.sub(r"<script.*?</script>", " ", html,
-                            flags=re.I | re.S)
-              text = re.sub(r"<style.*?</style>", " ", text,
-                            flags=re.I | re.S)
-              text = re.sub(r"<[^>]+>", " ", text)
+          def clean_html(text):
+              text = re.sub(
+                  r"<[^>]+>",
+                  " ",
+                  text
+              )
               text = (
                   text.replace("&nbsp;", " ")
-                      .replace("&#39;", "'")
                       .replace("&amp;", "&")
               )
-              return re.sub(r"\s+", " ", text).strip()
-
-          def parse_super_source():
-              html = download(SUPER_SOURCE)
-              text = normalize_text(html)
-
-              pattern = re.compile(
-                  r"Data:\s*(\d{2}/\d{2}/\d{4})\s*-\s*"
-                  r"Concorso\s*(\d+)\s+"
-                  r"(\d+)\s+(\d+)\s+(\d+)\s+"
-                  r"(\d+)\s+(\d+)\s+(\d+)\s+"
-                  r"Jolly",
-                  re.I
-              )
-
-              matches = pattern.findall(text)
-
-              if not matches:
-                  raise RuntimeError(
-                      "SuperEnalotto: impossible de lire la source."
-                  )
-
-              draws = []
-
-              for match in matches:
-                  date_text = match[0]
-                  contest = int(match[1])
-                  numbers = [int(x) for x in match[2:8]]
-
-                  if len(numbers) != 6:
-                      continue
-
-                  if len(set(numbers)) != 6:
-                      continue
-
-                  if not all(1 <= n <= 90 for n in numbers):
-                      continue
-
-                  date_value = datetime.strptime(
-                      date_text,
-                      "%d/%m/%Y"
-                  )
-
-                  if date_value < datetime(1997, 12, 3):
-                      continue
-
-                  draws.append(
-                      (
-                          date_value.strftime("%Y-%m-%d"),
-                          contest,
-                          sorted(numbers)
-                      )
-                  )
-
-              if not draws:
-                  raise RuntimeError(
-                      "SuperEnalotto: aucun tirage valide."
-                  )
-
-              return draws
-
-          def parse_euro_source():
-              html = download(EURO_SOURCE)
-
-              rows = re.findall(
-                  r"<tr[^>]*>(.*?)</tr>",
-                  html,
-                  flags=re.I | re.S
-              )
-
-              draws = []
-
-              for row in rows:
-                  cells = re.findall(
-                      r"<t[dh][^>]*>(.*?)</t[dh]>",
-                      row,
-                      flags=re.I | re.S
-                  )
-
-                  clean = []
-
-                  for cell in cells:
-                      value = re.sub(r"<[^>]+>", " ", cell)
-                      value = re.sub(r"\s+", " ", value).strip()
-                      clean.append(value)
-
-                  if len(clean) < 8:
-                      continue
-
-                  if not re.fullmatch(r"\d+", clean[0]):
-                      continue
-
-                  if not re.fullmatch(
-                      r"\d{2}/\d{2}/\d{4}",
-                      clean[1]
-                  ):
-                      continue
-
-                  try:
-                      contest = int(clean[0])
-                      date_value = datetime.strptime(
-                          clean[1],
-                          "%d/%m/%Y"
-                      )
-
-                      main = [int(x) for x in clean[2:7]]
-                      euro = [int(x) for x in clean[7:9]]
-
-                  except ValueError:
-                      continue
-
-                  if len(main) != 5 or len(euro) != 2:
-                      continue
-
-                  if len(set(main)) != 5:
-                      continue
-
-                  if len(set(euro)) != 2:
-                      continue
-
-                  if not all(1 <= n <= 50 for n in main):
-                      continue
-
-                  if not all(1 <= n <= 12 for n in euro):
-                      continue
-
-                  if date_value < datetime(2022, 3, 25):
-                      continue
-
-                  draws.append(
-                      (
-                          date_value.strftime("%d/%m/%Y"),
-                          contest,
-                          sorted(main),
-                          sorted(euro)
-                      )
-                  )
-
-              if not draws:
-                  raise RuntimeError(
-                      "EuroJackpot: impossible de lire la source."
-                  )
-
-              return draws
-
-          def valid_super_file(path):
-              try:
-                  with open(
-                      path,
-                      encoding="utf-8-sig",
-                      newline=""
-                  ) as f:
-                      rows = list(csv.reader(f))
-
-                  if len(rows) < 4200:
-                      return False
-
-                  for row in rows[1:]:
-                      if len(row) != 8:
-                          return False
-
-                      datetime.strptime(
-                          row[0],
-                          "%Y-%m-%d"
-                      )
-
-                      contest = int(row[1])
-
-                      if contest < 0:
-                          return False
-
-                      numbers = [int(x) for x in row[2:8]]
-
-                      if len(set(numbers)) != 6:
-                          return False
-
-                      if not all(
-                          1 <= n <= 90
-                          for n in numbers
-                      ):
-                          return False
-
-                  return True
-
-              except Exception:
-                  return False
-
-          def restore_super_if_needed():
-              if valid_super_file(SUPER_FILE):
-                  print("SuperEnalotto: fichier actuel valide.")
-                  return
-
-              print(
-                  "SuperEnalotto: fichier actuel invalide."
-                  " Restauration de la sauvegarde."
-              )
-
-              backup = download(SUPER_BACKUP)
-
-              with open(
-                  SUPER_FILE,
-                  "w",
-                  encoding="utf-8",
-                  newline=""
-              ) as f:
-                  f.write(backup)
-
-              if not valid_super_file(SUPER_FILE):
-                  raise RuntimeError(
-                      "SuperEnalotto: restauration impossible."
-                  )
-
-              print(
-                  "SuperEnalotto: sauvegarde restaurée."
-              )
-
-          def load_super():
-              rows = []
-
-              with open(
-                  SUPER_FILE,
-                  encoding="utf-8-sig",
-                  newline=""
-              ) as f:
-                  reader = csv.reader(f)
-
-                  next(reader)
-
-                  for row in reader:
-                      if len(row) != 8:
-                          continue
-
-                      rows.append(
-                          (
-                              row[0],
-                              int(row[1]),
-                              sorted(int(x) for x in row[2:8])
-                          )
-                      )
-
-              return rows
-
-          def load_euro():
-              rows = []
-
-              if not __import__("os").path.exists(EURO_FILE):
-                  return rows
-
-              with open(
-                  EURO_FILE,
-                  encoding="utf-8-sig",
-                  newline=""
-              ) as f:
-                  reader = csv.reader(
-                      f,
-                      delimiter=";"
-                  )
-
-                  next(reader)
-
-                  for row in reader:
-                      if len(row) != 8:
-                          continue
-
-                      rows.append(
-                          (
-                              row[0],
-                              sorted(int(x) for x in row[1:6]),
-                              sorted(int(x) for x in row[6:8])
-                          )
-                      )
-
-              return rows
-
-          restore_super_if_needed()
-
-          # -----------------------------------------------
+              return re.sub(
+                  r"\s+",
+                  " ",
+                  text
+              ).strip()
+
+          # =========================================================
           # SUPERENALOTTO
-          # -----------------------------------------------
+          # =========================================================
 
-          super_rows = load_super()
-          super_source_rows = parse_super_source()
+          print("Chargement sauvegarde SuperEnalotto...")
 
-          existing_super = {
-              (
-                  date,
-                  tuple(numbers)
-              )
-              for date, contest, numbers in super_rows
-          }
+          backup_text = download(SUPER_BACKUP)
 
-          added_super = 0
-
-          for date, contest, numbers in super_source_rows:
-
-              key = (
-                  date,
-                  tuple(numbers)
-              )
-
-              if key in existing_super:
-                  continue
-
-              super_rows.append(
-                  (
-                      date,
-                      contest,
-                      numbers
-                  )
-              )
-
-              existing_super.add(key)
-              added_super += 1
-
-          super_rows.sort(
-              key=lambda x: datetime.strptime(
-                  x[0],
-                  "%Y-%m-%d"
+          backup_rows = list(
+              csv.reader(
+                  io.StringIO(backup_text)
               )
           )
 
-          if not super_rows:
+          super_data = {}
+
+          for row in backup_rows[1:]:
+              if len(row) != 8:
+                  continue
+
+              try:
+                  date = datetime.strptime(
+                      row[0],
+                      "%Y-%m-%d"
+                  )
+                  contest = int(row[1])
+                  numbers = [
+                      int(x)
+                      for x in row[2:8]
+                  ]
+              except ValueError:
+                  continue
+
+              if contest <= 0:
+                  continue
+
+              if len(numbers) != 6:
+                  continue
+
+              if not all(
+                  1 <= n <= 90
+                  for n in numbers
+              ):
+                  continue
+
+              key = (
+                  date.strftime("%Y-%m-%d"),
+                  contest
+              )
+
+              super_data[key] = (
+                  date.strftime("%Y-%m-%d"),
+                  contest,
+                  sorted(numbers)
+              )
+
+          print(
+              f"Base propre: {len(super_data)} tirages"
+          )
+
+          # Récupération des 100 derniers tirages
+          # depuis Magicolotto.
+          print(
+              "Téléchargement des derniers tirages "
+              "SuperEnalotto..."
+          )
+
+          source = clean_html(
+              download(SUPER_SOURCE)
+          )
+
+          pattern = re.compile(
+              r"Data:\s*(\d{2}/\d{2}/\d{4})"
+              r"\s*-\s*Concorso\s+(\d+)"
+              r"\s+"
+              r"(\d+)\s+(\d+)\s+(\d+)\s+"
+              r"(\d+)\s+(\d+)\s+(\d+)"
+              r"\s+Jolly"
+          )
+
+          added_super = 0
+
+          for match in pattern.finditer(source):
+
+              date_text = match.group(1)
+              contest = int(match.group(2))
+
+              numbers = [
+                  int(match.group(i))
+                  for i in range(3, 9)
+              ]
+
+              date = datetime.strptime(
+                  date_text,
+                  "%d/%m/%Y"
+              )
+
+              if not all(
+                  1 <= n <= 90
+                  for n in numbers
+              ):
+                  continue
+
+              key = (
+                  date.strftime("%Y-%m-%d"),
+                  contest
+              )
+
+              if key not in super_data:
+                  added_super += 1
+
+              super_data[key] = (
+                  date.strftime("%Y-%m-%d"),
+                  contest,
+                  sorted(numbers)
+              )
+
+          super_rows = sorted(
+              super_data.values(),
+              key=lambda x: x[0]
+          )
+
+          if len(super_rows) < 4263:
               raise RuntimeError(
-                  "SuperEnalotto: aucun historique."
+                  "SuperEnalotto: historique incomplet."
               )
 
           latest_super = max(
-              datetime.strptime(x[0], "%Y-%m-%d")
+              datetime.strptime(
+                  x[0],
+                  "%Y-%m-%d"
+              )
               for x in super_rows
           )
 
           if latest_super < datetime(2026, 9, 8):
               raise RuntimeError(
-                  "SuperEnalotto: la source ne contient pas "
-                  "encore le tirage du 08/09/2026."
+                  "SuperEnalotto: dernier tirage "
+                  "trop ancien."
               )
 
           with open(
@@ -418,30 +230,31 @@ jobs:
 
               writer = csv.writer(f)
 
-              writer.writerow(
-                  [
-                      "date",
-                      "concorso",
-                      "n1",
-                      "n2",
-                      "n3",
-                      "n4",
-                      "n5",
-                      "n6"
-                  ]
-              )
+              writer.writerow([
+                  "date",
+                  "concorso",
+                  "n1",
+                  "n2",
+                  "n3",
+                  "n4",
+                  "n5",
+                  "n6"
+              ])
 
               for date, contest, numbers in super_rows:
-                  writer.writerow(
-                      [
-                          date,
-                          contest,
-                          *numbers
-                      ]
-                  )
+                  writer.writerow([
+                      date,
+                      contest,
+                      *numbers
+                  ])
 
           print(
-              f"SuperEnalotto: {added_super} nouveau(x) tirage(s)."
+              f"SuperEnalotto: {len(super_rows)} tirages."
+          )
+
+          print(
+              f"SuperEnalotto: "
+              f"{added_super} nouveau(x)."
           )
 
           print(
@@ -449,57 +262,94 @@ jobs:
               f"{latest_super.date()}"
           )
 
-          # -----------------------------------------------
+          # =========================================================
           # EUROJACKPOT
-          # -----------------------------------------------
+          # =========================================================
 
-          euro_rows = load_euro()
-          euro_source_rows = parse_euro_source()
+          print(
+              "Téléchargement EuroJackpot..."
+          )
 
-          existing_euro = {
-              (
-                  date,
-                  tuple(main),
-                  tuple(euro)
+          euro_source = clean_html(
+              download(EURO_SOURCE)
+          )
+
+          euro_rows = []
+
+          pattern_euro = re.compile(
+              r"(\d+)\s+"
+              r"(\d{2}/\d{2}/\d{4})\s+"
+              r"(\d+)\s+(\d+)\s+(\d+)\s+"
+              r"(\d+)\s+(\d+)\s+"
+              r"(\d+)\s+(\d+)"
+          )
+
+          euro_data = {}
+
+          for match in pattern_euro.finditer(
+              euro_source
+          ):
+
+              contest = int(match.group(1))
+
+              date = datetime.strptime(
+                  match.group(2),
+                  "%d/%m/%Y"
               )
-              for date, main, euro in euro_rows
-          }
 
-          added_euro = 0
-
-          for date, contest, main, euro in euro_source_rows:
-
-              key = (
-                  date,
-                  tuple(main),
-                  tuple(euro)
-              )
-
-              if key in existing_euro:
+              if date < datetime(2022, 3, 25):
                   continue
 
-              euro_rows.append(
-                  (
-                      date,
-                      main,
-                      euro
-                  )
+              main = [
+                  int(match.group(i))
+                  for i in range(3, 8)
+              ]
+
+              euro_numbers = [
+                  int(match.group(8)),
+                  int(match.group(9))
+              ]
+
+              if not all(
+                  1 <= n <= 50
+                  for n in main
+              ):
+                  continue
+
+              if not all(
+                  1 <= n <= 12
+                  for n in euro_numbers
+              ):
+                  continue
+
+              if len(set(main)) != 5:
+                  continue
+
+              if len(set(euro_numbers)) != 2:
+                  continue
+
+              key = date.strftime(
+                  "%d/%m/%Y"
               )
 
-              existing_euro.add(key)
-              added_euro += 1
+              euro_data[key] = (
+                  date.strftime("%d/%m/%Y"),
+                  sorted(main),
+                  sorted(euro_numbers)
+              )
 
-          euro_rows.sort(
+          if len(euro_data) < 450:
+              raise RuntimeError(
+                  "EuroJackpot: historique incomplet."
+              )
+
+          euro_rows = sorted(
+              euro_data.values(),
               key=lambda x: datetime.strptime(
                   x[0],
                   "%d/%m/%Y"
               )
           )
-
-          if not euro_rows:
-              raise RuntimeError(
-                  "EuroJackpot: aucun historique."
-              )
 
           latest_euro = max(
               datetime.strptime(
@@ -511,8 +361,8 @@ jobs:
 
           if latest_euro < datetime(2026, 9, 8):
               raise RuntimeError(
-                  "EuroJackpot: la source ne contient pas "
-                  "encore le tirage du 08/09/2026."
+                  "EuroJackpot: dernier tirage "
+                  "trop ancien."
               )
 
           with open(
@@ -527,30 +377,32 @@ jobs:
                   delimiter=";"
               )
 
-              writer.writerow(
-                  [
-                      "DATA",
-                      "N1",
-                      "N2",
-                      "N3",
-                      "N4",
-                      "N5",
-                      "E1",
-                      "E2"
-                  ]
-              )
+              writer.writerow([
+                  "DATA",
+                  "N1",
+                  "N2",
+                  "N3",
+                  "N4",
+                  "N5",
+                  "E1",
+                  "E2"
+              ])
 
               for date, main, euro in euro_rows:
-                  writer.writerow(
-                      [
-                          date,
-                          *main,
-                          *euro
+                  writer.writerow([
+                      date,
+                      *[
+                          f"{n:02d}"
+                          for n in main
+                      ],
+                      *[
+                          f"{n:02d}"
+                          for n in euro
                       ]
-                  )
+                  ])
 
           print(
-              f"EuroJackpot: {added_euro} nouveau(x) tirage(s)."
+              f"EuroJackpot: {len(euro_rows)} tirages."
           )
 
           print(
@@ -558,7 +410,9 @@ jobs:
               f"{latest_euro.date()}"
           )
 
-          print("Mise à jour terminée avec succès.")
+          print(
+              "Mise à jour terminée avec succès."
+          )
           PY
 
       - name: Commit updated history
