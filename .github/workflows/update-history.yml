@@ -1,3 +1,664 @@
+name: Update lottery history
+
+on:
+  schedule:
+    - cron: "30 21 * * *"
+    - cron: "30 22 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-history:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Update historical data
+        shell: bash
+        run: |
+          python <<'PY'
+          import csv
+          import io
+          import re
+          import urllib.request
+          from datetime import datetime, timedelta
+          from html.parser import HTMLParser
+
+          SUPER_BACKUP = (
+              "https://raw.githubusercontent.com/"
+              "rogerouffoue123-sketch/lotto-generator-data/"
+              "main/SuperEnalotto_History.csv"
+          )
+
+          SUPER_BASE = (
+              "https://www.superenalotto.it/"
+              "archivio-estrazioni"
+          )
+
+          EURO_SOURCE = (
+              "https://www.eurojackpot.it/"
+              "archivio-estrazioni"
+          )
+
+          SUPER_FILE = "SuperEnalotto_History.csv"
+          EURO_FILE = "EuroJackpot_History.csv"
+
+          MONTHS_IT = {
+              1: "gennaio",
+              2: "febbraio",
+              3: "marzo",
+              4: "aprile",
+              5: "maggio",
+              6: "giugno",
+              7: "luglio",
+              8: "agosto",
+              9: "settembre",
+              10: "ottobre",
+              11: "novembre",
+              12: "dicembre",
+          }
+
+          def download(url):
+              print(f"GET {url}")
+
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": (
+                          "Mozilla/5.0 "
+                          "(X11; Linux x86_64) "
+                          "AppleWebKit/537.36 "
+                          "Chrome/140 Safari/537.36"
+                      )
+                  }
+              )
+
+              with urllib.request.urlopen(
+                  request,
+                  timeout=60
+              ) as response:
+                  return response.read().decode(
+                      "utf-8",
+                      errors="replace"
+                  )
+
+          class TableParser(HTMLParser):
+
+              def __init__(self):
+                  super().__init__()
+                  self.rows = []
+                  self.current_row = None
+                  self.current_cell = None
+
+              def handle_starttag(self, tag, attrs):
+                  if tag == "tr":
+                      self.current_row = []
+
+                  elif tag in ("td", "th"):
+                      self.current_cell = ""
+
+              def handle_data(self, data):
+                  if self.current_cell is not None:
+                      self.current_cell += " " + data
+
+              def handle_endtag(self, tag):
+                  if tag in ("td", "th"):
+                      if self.current_row is not None:
+                          value = re.sub(
+                              r"\s+",
+                              " ",
+                              self.current_cell or ""
+                          ).strip()
+
+                          self.current_row.append(value)
+
+                      self.current_cell = None
+
+                  elif tag == "tr":
+                      if self.current_row:
+                          self.rows.append(self.current_row)
+
+                      self.current_row = None
+
+          def parse_date_from_text(text):
+              match = re.search(
+                  r"\b(\d{1,2})\s+"
+                  r"(gennaio|febbraio|marzo|aprile|maggio|giugno|"
+                  r"luglio|agosto|settembre|ottobre|novembre|dicembre)"
+                  r"\s+(\d{4})\b",
+                  text,
+                  re.IGNORECASE
+              )
+
+              if not match:
+                  return None
+
+              return datetime(
+                  int(match.group(3)),
+                  MONTHS_IT[match.group(2).lower()],
+                  int(match.group(1))
+              )
+
+          def parse_super_row(row):
+              joined = " ".join(row)
+
+              match = re.search(
+                  r"Concorso\s*(?:Nº|N°|n\.?)?\s*"
+                  r"(\d+)\s+del\s+"
+                  r"(\d{1,2})\s+"
+                  r"(gennaio|febbraio|marzo|aprile|maggio|giugno|"
+                  r"luglio|agosto|settembre|ottobre|novembre|dicembre)"
+                  r"\s+(\d{4})",
+                  joined,
+                  re.IGNORECASE
+              )
+
+              if not match:
+                  return None
+
+              contest = int(match.group(1))
+
+              date = datetime(
+                  int(match.group(4)),
+                  MONTHS_IT[match.group(3).lower()],
+                  int(match.group(2))
+              )
+
+              candidates = []
+
+              for cell in row:
+                  values = [
+                      int(x)
+                      for x in re.findall(
+                          r"\b\d{1,2}\b",
+                          cell
+                      )
+                  ]
+
+                  if len(values) >= 6:
+                      for start in range(
+                          0,
+                          len(values) - 5
+                      ):
+                          candidate = values[
+                              start:start + 6
+                          ]
+
+                          if (
+                              len(set(candidate)) == 6
+                              and all(
+                                  1 <= n <= 90
+                                  for n in candidate
+                              )
+                          ):
+                              candidates.append(candidate)
+
+              if not candidates:
+                  return None
+
+              numbers = sorted(candidates[0])
+
+              return (
+                  date.strftime("%Y-%m-%d"),
+                  contest,
+                  numbers
+              )
+
+          def parse_euro_row(row):
+              date = None
+              date_cell_index = None
+
+              for index, cell in enumerate(row):
+
+                  match = re.search(
+                      r"\b(\d{2}/\d{2}/\d{4})\b",
+                      cell
+                  )
+
+                  if match:
+                      date = datetime.strptime(
+                          match.group(1),
+                          "%d/%m/%Y"
+                      )
+
+                      date_cell_index = index
+                      break
+
+                  match = re.search(
+                      r"\b(\d{1,2})\s+"
+                      r"(gennaio|febbraio|marzo|aprile|maggio|giugno|"
+                      r"luglio|agosto|settembre|ottobre|novembre|dicembre)"
+                      r"\s+(\d{4})\b",
+                      cell,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      date = datetime(
+                          int(match.group(3)),
+                          MONTHS_IT[match.group(2).lower()],
+                          int(match.group(1))
+                      )
+
+                      date_cell_index = index
+                      break
+
+              if date is None:
+                  return None
+
+              tokens = []
+
+              for index, cell in enumerate(row):
+
+                  if index == date_cell_index:
+                      continue
+
+                  for value in re.findall(
+                      r"\b\d{1,2}\b",
+                      cell
+                  ):
+                      tokens.append(int(value))
+
+              candidates = []
+
+              for start in range(
+                  0,
+                  len(tokens) - 6
+              ):
+                  window = tokens[
+                      start:start + 7
+                  ]
+
+                  main = window[:5]
+                  euro = window[5:]
+
+                  if (
+                      len(set(main)) == 5
+                      and len(set(euro)) == 2
+                      and all(
+                          1 <= n <= 50
+                          for n in main
+                      )
+                      and all(
+                          1 <= n <= 12
+                          for n in euro
+                      )
+                  ):
+                      candidates.append(
+                          (
+                              start,
+                              main,
+                              euro
+                          )
+                      )
+
+              if not candidates:
+                  return None
+
+              _, main, euro = candidates[-1]
+
+              return (
+                  date.strftime("%d/%m/%Y"),
+                  sorted(main),
+                  sorted(euro)
+              )
+
+          # ============================================================
+          # SUPERENALOTTO
+          # ============================================================
+
+          print("=== SUPERENALOTTO ===")
+
+          super_data = {}
+
+          try:
+              backup_text = download(
+                  SUPER_BACKUP
+              )
+
+              backup_rows = list(
+                  csv.reader(
+                      io.StringIO(
+                          backup_text
+                      )
+                  )
+              )
+
+              for row in backup_rows[1:]:
+
+                  if len(row) != 8:
+                      continue
+
+                  try:
+                      date = datetime.strptime(
+                          row[0],
+                          "%Y-%m-%d"
+                      )
+
+                      contest = int(row[1])
+
+                      numbers = [
+                          int(x)
+                          for x in row[2:8]
+                      ]
+
+                  except ValueError:
+                      continue
+
+                  if (
+                      contest <= 0
+                      or len(numbers) != 6
+                      or len(set(numbers)) != 6
+                      or not all(
+                          1 <= n <= 90
+                          for n in numbers
+                      )
+                  ):
+                      continue
+
+                  key = (
+                      date.strftime("%Y-%m-%d"),
+                      contest
+                  )
+
+                  super_data[key] = (
+                      date.strftime("%Y-%m-%d"),
+                      contest,
+                      sorted(numbers)
+                  )
+
+          except Exception as exc:
+              print(
+                  "ATTENTION: impossible de charger "
+                  "la sauvegarde SuperEnalotto: "
+                  f"{exc}"
+              )
+
+          print(
+              "Base SuperEnalotto existante: "
+              f"{len(super_data)} tirages"
+          )
+
+          # Date italienne locale.
+          # On calcule le mois courant et le mois précédent.
+          today = datetime.utcnow().date()
+
+          current_month = today.replace(
+              day=1
+          )
+
+          previous_month = (
+              current_month -
+              timedelta(days=1)
+          ).replace(day=1)
+
+          months_to_fetch = [
+              previous_month,
+              current_month
+          ]
+
+          added_super = 0
+
+          for month_date in months_to_fetch:
+
+              month_name = MONTHS_IT[
+                  month_date.month
+              ]
+
+              url = (
+                  f"{SUPER_BASE}/"
+                  f"{month_date.year}/"
+                  f"{month_name}"
+              )
+
+              try:
+                  super_html = download(
+                      url
+                  )
+
+              except Exception as exc:
+                  print(
+                      "Archive SuperEnalotto "
+                      f"non disponible ({month_name}): "
+                      f"{exc}"
+                  )
+
+                  continue
+
+              parser = TableParser()
+
+              parser.feed(
+                  super_html
+              )
+
+              for row in parser.rows:
+
+                  parsed = parse_super_row(
+                      row
+                  )
+
+                  if parsed is None:
+                      continue
+
+                  date_text, contest, numbers = parsed
+
+                  key = (
+                      date_text,
+                      contest
+                  )
+
+                  if key not in super_data:
+                      added_super += 1
+
+                  super_data[key] = (
+                      date_text,
+                      contest,
+                      numbers
+                  )
+
+          super_rows = sorted(
+              super_data.values(),
+              key=lambda x: (
+                  x[0],
+                  x[1]
+              )
+          )
+
+          if not super_rows:
+              raise RuntimeError(
+                  "SuperEnalotto: aucun tirage valide."
+              )
+
+          latest_super = max(
+              datetime.strptime(
+                  row[0],
+                  "%Y-%m-%d"
+              )
+              for row in super_rows
+          )
+
+          print(
+              f"SuperEnalotto: "
+              f"{len(super_rows)} tirages"
+          )
+
+          print(
+              f"SuperEnalotto: "
+              f"{added_super} nouveau(x)"
+          )
+
+          print(
+              "SuperEnalotto: dernier = "
+              f"{latest_super.strftime('%Y-%m-%d')}"
+          )
+
+          # Validation du tirage du 01/10/2026.
+          if (
+              latest_super.date()
+              >= datetime(
+                  2026,
+                  10,
+                  1
+              ).date()
+          ):
+
+              if not any(
+                  row[1] == 157
+                  and row[0] == "2026-10-01"
+                  and row[2] == [
+                      5,
+                      12,
+                      28,
+                      41,
+                      56,
+                      66
+                  ]
+                  for row in super_rows
+              ):
+
+                  raise RuntimeError(
+                      "SuperEnalotto: le dernier "
+                      "tirage du 01/10/2026 "
+                      "est incorrect."
+                  )
+
+          with open(
+              SUPER_FILE,
+              "w",
+              encoding="utf-8",
+              newline=""
+          ) as f:
+
+              writer = csv.writer(f)
+
+              writer.writerow([
+                  "date",
+                  "concorso",
+                  "n1",
+                  "n2",
+                  "n3",
+                  "n4",
+                  "n5",
+                  "n6"
+              ])
+
+              for date, contest, numbers in super_rows:
+
+                  writer.writerow([
+                      date,
+                      contest,
+                      *numbers
+                  ])
+
+          # ============================================================
+          # EUROJACKPOT
+          # ============================================================
+
+          print(
+              "=== EUROJACKPOT ==="
+          )
+
+          euro_data = {}
+
+          # On conserve l'historique actuel comme base.
+          with open(
+              EURO_FILE,
+              "r",
+              encoding="utf-8-sig"
+          ) as f:
+
+              reader = csv.DictReader(
+                  f,
+                  delimiter=";"
+              )
+
+              for row in reader:
+
+                  try:
+                      date = datetime.strptime(
+                          row["DATA"],
+                          "%d/%m/%Y"
+                      )
+
+                      main = [
+                          int(row[f"N{i}"])
+                          for i in range(1, 6)
+                      ]
+
+                      euro = [
+                          int(row["E1"]),
+                          int(row["E2"])
+                      ]
+
+                  except (
+                      ValueError,
+                      KeyError,
+                      TypeError
+                  ):
+                      continue
+
+                  if (
+                      len(set(main)) != 5
+                      or len(set(euro)) != 2
+                      or not all(
+                          1 <= n <= 50
+                          for n in main
+                      )
+                      or not all(
+                          1 <= n <= 12
+                          for n in euro
+                      )
+                  ):
+                      continue
+
+                  key = date.strftime(
+                      "%Y-%m-%d"
+                  )
+
+                  euro_data[key] = (
+                      date.strftime(
+                          "%d/%m/%Y"
+                      ),
+                      sorted(main),
+                      sorted(euro)
+                  )
+
+          print(
+              "Historique EuroJackpot existant: "
+              f"{len(euro_data)} tirages"
+          )
+
+          print(
+              "Téléchargement de l'archive "
+              "officielle EuroJackpot..."
+          )
+
+          euro_html = download(
+              EURO_SOURCE
+          )
+
+          parser = TableParser()
+
+          parser.feed(
+              euro_html
+          )
+
+          added_euro = 0
+
+          for row in parser.rows:
+
+              parsed = parse_euro_row(
+                  row
+              )
 
               if parsed is None:
                   continue
@@ -7,7 +668,9 @@
               key = datetime.strptime(
                   date_text,
                   "%d/%m/%Y"
-              ).strftime("%Y-%m-%d")
+              ).strftime(
+                  "%Y-%m-%d"
+              )
 
               if key not in euro_data:
                   added_euro += 1
@@ -20,15 +683,17 @@
 
           euro_rows = sorted(
               euro_data.values(),
-              key=lambda x: datetime.strptime(
-                  x[0],
-                  "%d/%m/%Y"
-              )
+              key=lambda x:
+                  datetime.strptime(
+                      x[0],
+                      "%d/%m/%Y"
+                  )
           )
 
           if not euro_rows:
               raise RuntimeError(
-                  "EuroJackpot: aucun tirage valide."
+                  "EuroJackpot: aucun "
+                  "tirage valide."
               )
 
           latest_euro = max(
@@ -40,36 +705,50 @@
           )
 
           print(
-              f"EuroJackpot: {len(euro_rows)} tirages"
+              f"EuroJackpot: "
+              f"{len(euro_rows)} tirages"
           )
 
           print(
-              f"EuroJackpot: {added_euro} nouveau(x)"
+              f"EuroJackpot: "
+              f"{added_euro} nouveau(x)"
           )
 
           print(
-              f"EuroJackpot: dernier = "
+              "EuroJackpot: dernier = "
               f"{latest_euro.strftime('%Y-%m-%d')}"
           )
 
-          # Hard safety check for the latest known EuroJackpot draw.
-          # This prevents a successful workflow from silently keeping
-          # draw 78 when draw 79 is already published.
+          # Validation du Draw 79.
           if (
               latest_euro.date()
-              >= datetime(2026, 9, 29).date()
+              >= datetime(
+                  2026,
+                  9,
+                  29
+              ).date()
           ):
+
               if not any(
                   row[0] == "29/09/2026"
                   and row[1] == [
-                      21, 30, 36, 43, 48
+                      21,
+                      30,
+                      36,
+                      43,
+                      48
                   ]
-                  and row[2] == [1, 5]
+                  and row[2] == [
+                      1,
+                      5
+                  ]
                   for row in euro_rows
               ):
+
                   raise RuntimeError(
-                      "EuroJackpot: le tirage du "
-                      "29/09/2026 est absent ou incorrect."
+                      "EuroJackpot: le tirage "
+                      "du 29/09/2026 est absent "
+                      "ou incorrect."
                   )
 
           with open(
@@ -96,6 +775,7 @@
               ])
 
               for date, main, euro in euro_rows:
+
                   writer.writerow([
                       date,
                       *[
@@ -107,6 +787,10 @@
                           for n in euro
                       ]
                   ])
+
+          # ============================================================
+          # VALIDATION FINALE
+          # ============================================================
 
           print(
               "=== VALIDATION FINALE ==="
@@ -135,7 +819,9 @@
 
           git pull --rebase origin main
 
-          git add SuperEnalotto_History.csv EuroJackpot_History.csv
+          git add \
+            SuperEnalotto_History.csv \
+            EuroJackpot_History.csv
 
           if git diff --cached --quiet; then
             echo "Aucune nouvelle donnée."
@@ -143,4 +829,5 @@
           fi
 
           git commit -m "Update lottery history"
+
           git push
