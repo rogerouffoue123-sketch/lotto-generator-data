@@ -67,6 +67,15 @@ jobs:
               12: "dicembre",
           }
 
+          # Conversion inverse :
+          # "settembre" -> 9
+          # "ottobre"   -> 10
+          # etc.
+          MONTHS_IT_BY_NAME = {
+              value: key
+              for key, value in MONTHS_IT.items()
+          }
+
           def download(url):
               print(f"GET {url}")
 
@@ -144,7 +153,9 @@ jobs:
 
               return datetime(
                   int(match.group(3)),
-                  MONTHS_IT[match.group(2).lower()],
+                  MONTHS_IT_BY_NAME[
+                      match.group(2).lower()
+                  ],
                   int(match.group(1))
               )
 
@@ -169,7 +180,9 @@ jobs:
 
               date = datetime(
                   int(match.group(4)),
-                  MONTHS_IT[match.group(3).lower()],
+                  MONTHS_IT_BY_NAME[
+                      match.group(3).lower()
+                  ],
                   int(match.group(2))
               )
 
@@ -245,7 +258,9 @@ jobs:
                   if match:
                       date = datetime(
                           int(match.group(3)),
-                          MONTHS_IT[match.group(2).lower()],
+                          MONTHS_IT_BY_NAME[
+                              match.group(2).lower()
+                          ],
                           int(match.group(1))
                       )
 
@@ -388,8 +403,6 @@ jobs:
               f"{len(super_data)} tirages"
           )
 
-          # Date italienne locale.
-          # On calcule le mois courant et le mois précédent.
           today = datetime.utcnow().date()
 
           current_month = today.replace(
@@ -569,7 +582,6 @@ jobs:
 
           euro_data = {}
 
-          # On conserve l'historique actuel comme base.
           with open(
               EURO_FILE,
               "r",
