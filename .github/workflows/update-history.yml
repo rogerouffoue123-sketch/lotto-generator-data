@@ -67,10 +67,6 @@ jobs:
               12: "dicembre",
           }
 
-          # Conversion inverse :
-          # "settembre" -> 9
-          # "ottobre"   -> 10
-          # etc.
           MONTHS_IT_BY_NAME = {
               value: key
               for key, value in MONTHS_IT.items()
@@ -514,7 +510,6 @@ jobs:
               f"{latest_super.strftime('%Y-%m-%d')}"
           )
 
-          # Validation du tirage du 01/10/2026.
           if (
               latest_super.date()
               >= datetime(
@@ -731,7 +726,6 @@ jobs:
               f"{latest_euro.strftime('%Y-%m-%d')}"
           )
 
-          # Validation du Draw 79.
           if (
               latest_euro.date()
               >= datetime(
@@ -829,8 +823,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git pull --rebase origin main
-
           git add \
             SuperEnalotto_History.csv \
             EuroJackpot_History.csv
@@ -842,4 +834,4 @@ jobs:
 
           git commit -m "Update lottery history"
 
-          git push
+          git push origin HEAD:main
