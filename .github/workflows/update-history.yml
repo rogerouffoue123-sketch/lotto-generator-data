@@ -660,6 +660,7 @@ jobs:
           )
 
           added_euro = 0
+          scraped_euro_dates = set()
 
           for row in parser.rows:
 
@@ -679,6 +680,8 @@ jobs:
                   "%Y-%m-%d"
               )
 
+              scraped_euro_dates.add(key)
+
               if key not in euro_data:
                   added_euro += 1
 
@@ -686,6 +689,15 @@ jobs:
                   date_text,
                   main,
                   euro
+              )
+
+          # Contrôle de la source officielle elle-même :
+          # l'ancien CSV du dépôt ne doit jamais masquer un échec
+          # de lecture de la page officielle.
+          if not scraped_euro_dates:
+              raise RuntimeError(
+                  "EuroJackpot: aucun tirage extrait de la page officielle. "
+                  "Le CSV existant est conservé et le workflow échoue."
               )
 
           euro_rows = sorted(
@@ -709,6 +721,23 @@ jobs:
                   "%d/%m/%Y"
               )
               for row in euro_rows
+          )
+
+          latest_scraped_euro = max(
+              datetime.strptime(date, "%Y-%m-%d")
+              for date in scraped_euro_dates
+          )
+
+          if latest_scraped_euro.date() < latest_euro.date():
+              raise RuntimeError(
+                  "EuroJackpot: la page officielle ne fournit pas le dernier "
+                  f"tirage présent dans le CSV ({latest_euro:%Y-%m-%d}); "
+                  f"dernier tirage extrait: {latest_scraped_euro:%Y-%m-%d}."
+              )
+
+          print(
+              "EuroJackpot: dernier tirage extrait de la source officielle = "
+              f"{latest_scraped_euro.strftime('%Y-%m-%d')}"
           )
 
           print(
